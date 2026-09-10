@@ -1,13 +1,13 @@
 import plotly.graph_objects as go
 
 
-def anomaly_map(work, x_col, y_col, value_col, xx, yy, zz, title):
+def anomaly_map(work, x_col, y_col, value_col, xx, yy, zz, title, colorscale='Turbo'):
     fig = go.Figure()
     fig.add_trace(go.Contour(
         x=xx[0, :],
         y=yy[:, 0],
         z=zz,
-        colorscale='Turbo',
+        colorscale=colorscale,
         contours=dict(showlabels=True),
         colorbar=dict(title=value_col),
         name='Grid',
