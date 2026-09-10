@@ -6,4 +6,3 @@ plotly>=5.24
 matplotlib>=3.9
 PySide6>=6.8
 PyKrige>=1.7.3
-pygimli>=1.6
