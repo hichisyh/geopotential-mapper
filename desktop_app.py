@@ -6,10 +6,13 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.colors import LinearSegmentedColormap
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -29,13 +32,46 @@ from geopotential.processing.gridding import grid_scattered
 from geopotential.visualization.palettes import PALETTES, get_palette
 
 
+class ColorButton(QPushButton):
+    def __init__(self, text, color):
+        super().__init__(text)
+        self.color = color
+        self.clicked.connect(self.choose_color)
+        self.refresh()
+
+    def choose_color(self):
+        selected = QColorDialog.getColor(QColor(self.color), self, f'Choose {self.text()}')
+        if selected.isValid():
+            self.color = selected.name()
+            self.refresh()
+
+    def refresh(self):
+        self.setStyleSheet(f'background-color: {self.color}; color: black; font-weight: 600;')
+
+
 class MapCanvas(FigureCanvas):
     def __init__(self):
         self.figure, self.ax = plt.subplots(figsize=(9, 7))
         super().__init__(self.figure)
         self.colorbar = None
 
-    def plot_grid(self, work, x_col, y_col, value_col, xx, yy, zz, palette_name, reverse=False):
+    def plot_grid(
+        self,
+        work,
+        x_col,
+        y_col,
+        value_col,
+        xx,
+        yy,
+        zz,
+        palette_name,
+        reverse=False,
+        custom_colors=None,
+        levels_count=30,
+        manual_range=None,
+        show_stations=True,
+        show_contours=True,
+    ):
         self.ax.clear()
         if self.colorbar is not None:
             try:
@@ -44,24 +80,41 @@ class MapCanvas(FigureCanvas):
                 pass
             self.colorbar = None
 
-        colors = [color for _, color in get_palette(palette_name, reverse)]
-        cmap = LinearSegmentedColormap.from_list(palette_name, colors, N=256)
+        if custom_colors:
+            colors = custom_colors
+            cmap_name = 'Custom'
+        else:
+            colors = [color for _, color in get_palette(palette_name, reverse)]
+            cmap_name = palette_name
+        cmap = LinearSegmentedColormap.from_list(cmap_name, colors, N=256)
+
         finite = np.asarray(zz)[np.isfinite(zz)]
         if finite.size == 0:
             raise ValueError('The interpolation produced no finite grid values.')
 
-        levels = np.linspace(float(np.nanmin(finite)), float(np.nanmax(finite)), 30)
-        if np.allclose(levels[0], levels[-1]):
-            levels = 20
+        if manual_range is None:
+            vmin = float(np.nanmin(finite))
+            vmax = float(np.nanmax(finite))
+        else:
+            vmin, vmax = manual_range
+            if vmax <= vmin:
+                raise ValueError('Manual map maximum must be greater than minimum.')
 
-        contour = self.ax.contourf(xx, yy, zz, levels=levels, cmap=cmap)
-        self.ax.contour(xx, yy, zz, levels=levels, colors='black', linewidths=0.2, alpha=0.35)
-        self.ax.scatter(work[x_col], work[y_col], s=10, c='black', marker='o', label='Stations')
+        if np.isclose(vmin, vmax):
+            vmax = vmin + 1e-9
+        levels = np.linspace(vmin, vmax, max(3, int(levels_count)))
+
+        contour = self.ax.contourf(xx, yy, zz, levels=levels, cmap=cmap, extend='both')
+        if show_contours:
+            self.ax.contour(xx, yy, zz, levels=levels, colors='black', linewidths=0.25, alpha=0.40)
+        if show_stations:
+            self.ax.scatter(work[x_col], work[y_col], s=10, c='black', marker='o', label='Stations')
+            self.ax.legend(loc='upper right')
+
         self.ax.set_xlabel(x_col)
         self.ax.set_ylabel(y_col)
         self.ax.set_title(value_col)
         self.ax.set_aspect('equal', adjustable='box')
-        self.ax.legend(loc='upper right')
         self.colorbar = self.figure.colorbar(contour, ax=self.ax, pad=0.02)
         self.colorbar.set_label(value_col)
         self.figure.tight_layout()
@@ -72,26 +125,24 @@ class GeoPotentialDesktop(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('GeoPotential Mapper')
-        self.resize(1450, 900)
+        self.resize(1500, 920)
         self.df = None
         self.current_grid = None
 
         root = QWidget()
         self.setCentralWidget(root)
         root_layout = QHBoxLayout(root)
-
         splitter = QSplitter(Qt.Horizontal)
         root_layout.addWidget(splitter)
 
         controls = QWidget()
-        controls.setMinimumWidth(320)
-        controls.setMaximumWidth(390)
+        controls.setMinimumWidth(335)
+        controls.setMaximumWidth(410)
         form = QFormLayout(controls)
 
         self.open_button = QPushButton('Open survey file')
         self.open_button.clicked.connect(self.open_file)
         form.addRow(self.open_button)
-
         self.file_label = QLabel('No file loaded')
         self.file_label.setWordWrap(True)
         form.addRow('File', self.file_label)
@@ -104,15 +155,8 @@ class GeoPotentialDesktop(QMainWindow):
         form.addRow('Value', self.value_combo)
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems([
-            'Linear',
-            'Nearest',
-            'Cubic',
-            'Ordinary Kriging',
-            'Minimum Curvature',
-        ])
+        self.method_combo.addItems(['Linear', 'Nearest', 'Cubic', 'Ordinary Kriging', 'Minimum Curvature'])
         form.addRow('Gridding', self.method_combo)
-
         self.variogram_combo = QComboBox()
         self.variogram_combo.addItems(['Spherical', 'Exponential', 'Gaussian', 'Linear', 'Power'])
         form.addRow('Kriging variogram', self.variogram_combo)
@@ -129,13 +173,48 @@ class GeoPotentialDesktop(QMainWindow):
         self.palette_combo = QComboBox()
         self.palette_combo.addItems(list(PALETTES.keys()))
         self.reverse_check = QCheckBox('Reverse palette')
+        self.custom_check = QCheckBox('Use custom 3-color palette')
         form.addRow('Color palette', self.palette_combo)
         form.addRow('', self.reverse_check)
+        form.addRow('', self.custom_check)
+
+        color_row = QWidget()
+        color_layout = QHBoxLayout(color_row)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        self.low_color = ColorButton('Low', '#174a9c')
+        self.mid_color = ColorButton('Mid', '#ffffff')
+        self.high_color = ColorButton('High', '#b51f2e')
+        color_layout.addWidget(self.low_color)
+        color_layout.addWidget(self.mid_color)
+        color_layout.addWidget(self.high_color)
+        form.addRow('Custom colors', color_row)
+
+        self.levels_spin = QSpinBox()
+        self.levels_spin.setRange(3, 100)
+        self.levels_spin.setValue(30)
+        form.addRow('Contour levels', self.levels_spin)
+
+        self.manual_range_check = QCheckBox('Use manual color range')
+        form.addRow('', self.manual_range_check)
+        self.range_min = QDoubleSpinBox()
+        self.range_min.setRange(-1e12, 1e12)
+        self.range_min.setDecimals(4)
+        self.range_max = QDoubleSpinBox()
+        self.range_max.setRange(-1e12, 1e12)
+        self.range_max.setDecimals(4)
+        form.addRow('Color minimum', self.range_min)
+        form.addRow('Color maximum', self.range_max)
+
+        self.show_stations = QCheckBox('Show stations')
+        self.show_stations.setChecked(True)
+        self.show_contours = QCheckBox('Show contour lines')
+        self.show_contours.setChecked(True)
+        form.addRow('', self.show_stations)
+        form.addRow('', self.show_contours)
 
         self.grid_button = QPushButton('Generate map')
         self.grid_button.clicked.connect(self.generate_map)
         form.addRow(self.grid_button)
-
         self.export_button = QPushButton('Export grid CSV')
         self.export_button.clicked.connect(self.export_grid)
         form.addRow(self.export_button)
@@ -151,17 +230,13 @@ class GeoPotentialDesktop(QMainWindow):
         self.table.setMaximumHeight(220)
         right_layout.addWidget(self.canvas, stretch=1)
         right_layout.addWidget(self.table)
-
         splitter.addWidget(controls)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            'Open survey data',
-            '',
-            'Survey files (*.csv *.xyz *.txt *.dat);;All files (*.*)',
+            self, 'Open survey data', '', 'Survey files (*.csv *.xyz *.txt *.dat);;All files (*.*)'
         )
         if not path:
             return
@@ -205,7 +280,6 @@ class GeoPotentialDesktop(QMainWindow):
         if self.df is None:
             QMessageBox.information(self, 'No data', 'Load a survey file first.')
             return
-
         method = self.method_combo.currentText()
         self.status_label.setText(f'Running {method}...')
         QApplication.processEvents()
@@ -220,6 +294,22 @@ class GeoPotentialDesktop(QMainWindow):
                 ny=self.ny_spin.value(),
                 variogram_model=self.variogram_combo.currentText().lower(),
             )
+
+            finite = np.asarray(zz)[np.isfinite(zz)]
+            if finite.size and not self.manual_range_check.isChecked():
+                self.range_min.setValue(float(np.nanmin(finite)))
+                self.range_max.setValue(float(np.nanmax(finite)))
+
+            custom_colors = None
+            if self.custom_check.isChecked():
+                custom_colors = [self.low_color.color, self.mid_color.color, self.high_color.color]
+                if self.reverse_check.isChecked():
+                    custom_colors.reverse()
+
+            manual_range = None
+            if self.manual_range_check.isChecked():
+                manual_range = (self.range_min.value(), self.range_max.value())
+
             self.canvas.plot_grid(
                 work,
                 self.x_combo.currentText(),
@@ -230,6 +320,11 @@ class GeoPotentialDesktop(QMainWindow):
                 zz,
                 self.palette_combo.currentText(),
                 reverse=self.reverse_check.isChecked(),
+                custom_colors=custom_colors,
+                levels_count=self.levels_spin.value(),
+                manual_range=manual_range,
+                show_stations=self.show_stations.isChecked(),
+                show_contours=self.show_contours.isChecked(),
             )
             self.current_grid = (xx, yy, zz)
             note = ' Kriging variance was also calculated.' if variance is not None else ''
