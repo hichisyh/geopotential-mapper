@@ -127,3 +127,9 @@ requirements.txt
 Development remains deliberately centered on **gravity and magnetic visualization and processing**. Near-term work includes stronger FFT edge handling, additional gravity filters, magnetic processing, profiles, spectrum/depth tools, Euler solutions, map/export improvements, and Windows packaging.
 
 Advanced modelling or inversion may be explored separately in the future, but it is not the primary purpose of GeoPotential Mapper.
+
+## License
+
+GeoPotential Mapper is free and open-source software licensed under the **GNU General Public License v3.0 (GPL-3.0)**. You may use, study, modify, and redistribute the software under the terms of the GPL-3.0. Distributed modified/derivative versions covered by the GPL must preserve the applicable license and source-code obligations.
+
+See the [`LICENSE`](LICENSE) file for the complete license terms.
