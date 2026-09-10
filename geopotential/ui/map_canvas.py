@@ -1,33 +1,20 @@
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QSizePolicy
 
-from geopotential.visualization.palettes import get_palette
-
 
 class MapCanvas(FigureCanvas):
-    """Responsive Matplotlib canvas with a permanent colorbar axis.
+    """Responsive map-only Matplotlib canvas.
 
-    The map axis and colorbar axis are created once and reused on every redraw,
-    preventing repeated Figure.colorbar() calls from progressively shrinking the map.
+    The color scale is intentionally rendered by a separate Qt widget. This
+    keeps Matplotlib from allocating or reallocating map space for a colorbar
+    during repeated Generate/Refresh actions.
     """
 
     def __init__(self, parent=None):
         self.figure = Figure(figsize=(10, 7), constrained_layout=False)
-        grid = self.figure.add_gridspec(
-            1,
-            2,
-            width_ratios=[32, 1],
-            left=0.075,
-            right=0.965,
-            bottom=0.08,
-            top=0.94,
-            wspace=0.10,
-        )
-        self.ax = self.figure.add_subplot(grid[0, 0])
-        self.cax = self.figure.add_subplot(grid[0, 1])
+        self.ax = self.figure.add_axes([0.09, 0.09, 0.88, 0.84])
         super().__init__(self.figure)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -36,48 +23,30 @@ class MapCanvas(FigureCanvas):
 
     def clear_map(self):
         self.ax.clear()
-        self.cax.clear()
         self._last_mappable = None
         self.draw_idle()
 
     def plot_layer(
         self,
         layer,
-        palette_name,
-        reverse=False,
-        custom_colors=None,
+        color_scale,
         levels_count=30,
-        manual_range=None,
         show_contours=True,
         stations=None,
     ):
         self.ax.clear()
-        self.cax.clear()
-
-        if custom_colors:
-            colors = custom_colors
-            cmap_name = "Custom"
-        else:
-            colors = [color for _, color in get_palette(palette_name, reverse)]
-            cmap_name = palette_name
-        cmap = LinearSegmentedColormap.from_list(cmap_name, colors, N=256)
 
         zz = np.asarray(layer.data, dtype=float)
         finite = zz[np.isfinite(zz)]
         if finite.size == 0:
-            raise ValueError("The selected layer contains no finite grid values.")
+            raise ValueError('The selected layer contains no finite grid values.')
 
-        if manual_range is None:
-            vmin = float(np.nanmin(finite))
-            vmax = float(np.nanmax(finite))
-        else:
-            vmin, vmax = manual_range
-            if vmax <= vmin:
-                raise ValueError("Manual map maximum must be greater than minimum.")
+        vmin = float(color_scale.vmin)
+        vmax = float(color_scale.vmax)
+        if vmax <= vmin:
+            raise ValueError('Color scale maximum must be greater than minimum.')
 
-        if np.isclose(vmin, vmax):
-            vmax = vmin + 1e-9
-
+        cmap = color_scale.to_colormap()
         levels = np.linspace(vmin, vmax, max(3, int(levels_count)))
         contour = self.ax.contourf(
             layer.x,
@@ -85,7 +54,7 @@ class MapCanvas(FigureCanvas):
             zz,
             levels=levels,
             cmap=cmap,
-            extend="both",
+            extend='both',
         )
         self._last_mappable = contour
 
@@ -95,23 +64,19 @@ class MapCanvas(FigureCanvas):
                 layer.y,
                 zz,
                 levels=levels,
-                colors="black",
+                colors='black',
                 linewidths=0.25,
                 alpha=0.40,
             )
 
         if stations is not None:
             sx, sy = stations
-            self.ax.scatter(sx, sy, s=10, c="black", marker="o", label="Stations")
-            self.ax.legend(loc="upper right")
+            self.ax.scatter(sx, sy, s=10, c='black', marker='o', label='Stations')
+            self.ax.legend(loc='upper right')
 
-        self.ax.set_xlabel("X / Easting")
-        self.ax.set_ylabel("Y / Northing")
-        subtitle = f" — {layer.operation}" if layer.operation else ""
-        self.ax.set_title(f"{layer.name}{subtitle}")
-        self.ax.set_aspect("equal", adjustable="box")
-
-        colorbar = self.figure.colorbar(contour, cax=self.cax)
-        colorbar.set_label(layer.unit or layer.name)
-
+        self.ax.set_xlabel('X / Easting')
+        self.ax.set_ylabel('Y / Northing')
+        subtitle = f' — {layer.operation}' if layer.operation else ''
+        self.ax.set_title(f'{layer.name}{subtitle}')
+        self.ax.set_aspect('equal', adjustable='box')
         self.draw_idle()
